@@ -20,7 +20,6 @@ import com.bc.jpa.EntityUpdater;
 import com.bc.jpa.JpaContext;
 import com.bc.jpa.JpaMetaData;
 import com.bc.jpa.JpaUtil;
-import com.bc.jpa.sync.RemoteUpdater;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -32,13 +31,14 @@ import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.persistence.EntityManager;
+import com.bc.jpa.sync.RemoteEntityUpdater;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 9, 2017 10:53:46 PM
  */
-public class RemoteUpdaterImpl implements RemoteUpdater {
+public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
     
-    private transient static final Logger logger = Logger.getLogger(RemoteUpdaterImpl.class.getName());
+    private transient static final Logger logger = Logger.getLogger(RemoteEntityUpdaterImpl.class.getName());
     
     private final int merge = 1;
     private final int persist = 2;
@@ -49,7 +49,7 @@ public class RemoteUpdaterImpl implements RemoteUpdater {
     private final List<Class> masterTypes;
     private final List<Class> slaveTypes;
     
-    public RemoteUpdaterImpl(
+    public RemoteEntityUpdaterImpl(
             JpaContext jpa, 
             Predicate<String> masterPersistenceUnitFilter,
             Predicate<String> slavePersistenceUnitFilter) {
@@ -63,7 +63,7 @@ public class RemoteUpdaterImpl implements RemoteUpdater {
                 final Class [] puClasses = metaData.getEntityClasses(puName); 
                 this.masterTypes.addAll(Arrays.asList(puClasses));
             }
-            if(masterPersistenceUnitFilter.test(puName)) {
+            if(slavePersistenceUnitFilter.test(puName)) {
                 final Class [] puClasses = metaData.getEntityClasses(puName); 
                 this.slaveTypes.addAll(Arrays.asList(puClasses));
             }

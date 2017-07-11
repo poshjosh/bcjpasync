@@ -38,6 +38,8 @@ public interface SlaveUpdates {
         public boolean addMerge(Object entity) { return false; }
         @Override
         public boolean addRemove(Object entity) { return false; }
+        @Override
+        public int getPendingUpdatesSize() { return 0; }
     };
     
     void requestStop();
@@ -55,4 +57,6 @@ public interface SlaveUpdates {
     boolean addMerge(Object entity);
     
     boolean addRemove(Object entity);
+    
+    int getPendingUpdatesSize();
 }

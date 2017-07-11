@@ -19,7 +19,7 @@ package com.bc.jpa.sync;
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 9, 2017 10:52:29 PM
  */
-public interface RemoteUpdater {
+public interface RemoteEntityUpdater {
     
     Object update(Object entity, Object entityId);
     

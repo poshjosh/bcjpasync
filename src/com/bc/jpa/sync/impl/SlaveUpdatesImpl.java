@@ -16,7 +16,6 @@
 
 package com.bc.jpa.sync.impl;
 
-import com.bc.jpa.sync.RemoteUpdater;
 import com.bc.jpa.sync.SlaveUpdates;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -36,6 +35,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import com.bc.jpa.sync.RemoteEntityUpdater;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 7, 2017 7:28:37 PM
@@ -55,25 +55,24 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
     
     private final Path backupDir;
     
-    private final RemoteUpdater slaveUpdater;
+    private final RemoteEntityUpdater slaveUpdater;
     
     private final Predicate<Throwable> commsLinkFailureTest;
     
     private final Queue<Integer> updateTypes;
     private final Queue entities;
     
-    public SlaveUpdatesImpl(Path backupDir, RemoteUpdater slaveUpdater, Predicate<Throwable> commsLinkFailureTest) {
+    public SlaveUpdatesImpl(Path backupDir, RemoteEntityUpdater slaveUpdater, Predicate<Throwable> commsLinkFailureTest) {
         this.backupDir = Objects.requireNonNull(backupDir);
         this.slaveUpdater = Objects.requireNonNull(slaveUpdater);
         this.commsLinkFailureTest = commsLinkFailureTest;
         final Object [] loaded = this.loadOrCreate();
         
         this.updateTypes = (Queue<Integer>)loaded[0];
-        logger.log(Level.FINE, "Pending updates: {0}", this.updateTypes.size());
-        logger.log(Level.FINER, "Pending update types: {0}", this.updateTypes);
+        logger.log(Level.INFO, "Pending updates count: {0}", this.updateTypes.size());
         
         this.entities = (Queue)loaded[1];
-        logger.log(Level.FINER, "Pending entities: {0}", this.updateTypes);
+        logger.log(Level.FINE, "Pending entities: {0}", this.entities);
         
         this.init();
     }
@@ -200,8 +199,29 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
     }
     
     private void save() {
-        this.writeNamedObject("updateTypes.pending", this.updateTypes);
-        this.writeNamedObject("entities.pending", this.entities);
+        
+        logger.log(Level.FINE, "Saving {0} slave updates", this.getPendingUpdatesSize());
+        
+        new Thread() {
+            @Override
+            public void run() {
+                try{
+                    writeNamedObject("updateTypes.pending", updateTypes);
+                }catch(RuntimeException e) { 
+                    logger.log(Level.WARNING, "Error saving updateTypes.pending", e);
+                }
+            }
+        }.start();
+        new Thread() {
+            @Override
+            public void run() {
+                try{
+                    writeNamedObject("entities.pending", entities);
+                }catch(RuntimeException e) { 
+                    logger.log(Level.WARNING, "Error saving entities.pending", e);
+                }
+            }
+        }.start();
     }
     
     @Override
@@ -224,17 +244,28 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
         if(stopRequested) { throw new IllegalStateException(); }
         
         try{
+            
             lock.writeLock().lock();
+            
             updateTypes.add(updateType);
             return entities.add(entity);
+            
         }catch(RuntimeException e) {
             while(updateTypes.size() > entities.size()) {
                 updateTypes.remove(updateTypes.size()-1);
             }
             throw e;
         }finally{
+            
             lock.writeLock().unlock();
+            
+            logger.log(Level.FINER, "Pending slave updates: {0}", this.getPendingUpdatesSize());
         }
+    }
+
+    @Override
+    public int getPendingUpdatesSize() {
+        return Math.min(this.updateTypes.size(), this.entities.size());
     }
 
     public Object readNamedObject(String name, Object outputIfNone) {

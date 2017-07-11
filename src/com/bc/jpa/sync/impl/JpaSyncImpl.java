@@ -22,7 +22,6 @@ import com.bc.jpa.JpaMetaData;
 import com.bc.jpa.search.QuerySearchResults;
 import com.bc.jpa.search.SearchResults;
 import com.bc.jpa.sync.JpaSync;
-import com.bc.jpa.sync.RemoteUpdater;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +34,7 @@ import javax.persistence.EntityManager;
 import javax.persistence.TypedQuery;
 import javax.persistence.criteria.CriteriaBuilder;
 import javax.persistence.criteria.CriteriaQuery;
+import com.bc.jpa.sync.RemoteEntityUpdater;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 8, 2017 9:57:01 PM
@@ -57,9 +57,9 @@ public class JpaSyncImpl implements JpaSync {
     
     private final Predicate<Throwable> commsLinkFailureTest;
     
-    private final RemoteUpdater remoteUpdater;
+    private final RemoteEntityUpdater remoteUpdater;
 
-    public JpaSyncImpl(JpaContext master, RemoteUpdater remoteUpdater, 
+    public JpaSyncImpl(JpaContext master, RemoteEntityUpdater remoteUpdater, 
             int pageSize, Predicate<Throwable> commsLinkFailureTest) {
         this.master = Objects.requireNonNull(master);
         this.remoteUpdater = Objects.requireNonNull(remoteUpdater);
