@@ -17,15 +17,15 @@
 package com.bc.jpa.sync;
 
 /**
- * @author Chinomso Bassey Ikwuagwu on Mar 9, 2017 10:52:29 PM
+ * @author Chinomso Bassey Ikwuagwu on Aug 12, 2017 9:08:11 AM
  */
-public interface RemoteEntityUpdater {
+public interface PendingUpdate {
     
-    Object update(Object entity, Object entityId);
+    enum UpdateType{PERSIST, MERGE, REMOVE}
     
-    Object merge(Object entity);
-            
-    void persist(Object entity); 
+    UpdateType getUpdateType();
     
-    void remove(Object entity);
+    long getTimeCreated();
+    
+    Object getEntity();
 }

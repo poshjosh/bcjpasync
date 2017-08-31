@@ -16,12 +16,29 @@
 
 package com.bc.jpa.sync;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 7, 2017 7:18:33 PM
  */
-public interface SlaveUpdates {
+public interface PendingUpdatesManager {
     
-    SlaveUpdates NO_OP = new SlaveUpdates() {
+    PendingUpdatesManager NO_OP = new PendingUpdatesManager() {
+        @Override
+        public List<PendingUpdate> getPendingUpdates() {
+            return Collections.EMPTY_LIST;
+        }
+        @Override
+        public int getMark() {
+            return this.getPendingUpdatesSize();
+        }
+        @Override
+        public int mark(int n) {
+            return this.getPendingUpdatesSize();
+        }
+        @Override
+        public void rollbackToMarkedPosition() { }
         @Override
         public void requestStop() { }
         @Override
@@ -39,8 +56,28 @@ public interface SlaveUpdates {
         @Override
         public boolean addRemove(Object entity) { return false; }
         @Override
-        public int getPendingUpdatesSize() { return 0; }
+        public int getPendingUpdatesSize() { return this.getPendingUpdates().size(); }
     };
+    
+    List<PendingUpdate> getPendingUpdates();
+    
+    default boolean isMarked() {
+        return this.getMark() > -1;
+    }
+    
+    default void unmark() {
+        this.mark(-1);
+    }
+    
+    default int mark() {
+        return this.mark(this.getPendingUpdatesSize());
+    }
+    
+    int getMark();
+    
+    int mark(int n);
+    
+    void rollbackToMarkedPosition();  
     
     void requestStop();
     

@@ -34,7 +34,7 @@ import javax.persistence.EntityManager;
 import javax.persistence.TypedQuery;
 import javax.persistence.criteria.CriteriaBuilder;
 import javax.persistence.criteria.CriteriaQuery;
-import com.bc.jpa.sync.RemoteEntityUpdater;
+import com.bc.jpa.sync.Updater;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 8, 2017 9:57:01 PM
@@ -57,9 +57,9 @@ public class JpaSyncImpl implements JpaSync {
     
     private final Predicate<Throwable> commsLinkFailureTest;
     
-    private final RemoteEntityUpdater remoteUpdater;
+    private final Updater remoteUpdater;
 
-    public JpaSyncImpl(JpaContext master, RemoteEntityUpdater remoteUpdater, 
+    public JpaSyncImpl(JpaContext master, Updater remoteUpdater, 
             int pageSize, Predicate<Throwable> commsLinkFailureTest) {
         this.master = Objects.requireNonNull(master);
         this.remoteUpdater = Objects.requireNonNull(remoteUpdater);

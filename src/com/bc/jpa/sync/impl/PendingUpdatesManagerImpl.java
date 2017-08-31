@@ -16,7 +16,8 @@
 
 package com.bc.jpa.sync.impl;
 
-import com.bc.jpa.sync.SlaveUpdates;
+import com.bc.jpa.sync.PendingUpdate;
+import com.bc.jpa.sync.PendingUpdate.UpdateType;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.FileInputStream;
@@ -25,54 +26,47 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.LinkedList;
 import java.util.Objects;
-import java.util.Queue;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import com.bc.jpa.sync.RemoteEntityUpdater;
+import com.bc.jpa.sync.Updater;
+import com.bc.jpa.sync.PendingUpdatesManager;
+import java.io.File;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 7, 2017 7:28:37 PM
  */
-public class SlaveUpdatesImpl implements SlaveUpdates {
+public class PendingUpdatesManagerImpl implements PendingUpdatesManager {
     
-    private transient static final Logger logger = Logger.getLogger(SlaveUpdatesImpl.class.getName());
+    private transient static final Logger logger = Logger.getLogger(PendingUpdatesManagerImpl.class.getName());
     
     private volatile boolean stopRequested;
     private volatile boolean paused;
     
-    private final int persist = 1;
-    private final int merge = 2;
-    private final int remove = 3;
-    
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     
-    private final Path backupDir;
+    private final File file;
     
-    private final RemoteEntityUpdater slaveUpdater;
+    private final Updater updater;
     
-    private final Predicate<Throwable> commsLinkFailureTest;
+    private final Predicate<Throwable> retryOnExceptionTest;
     
-    private final Queue<Integer> updateTypes;
-    private final Queue entities;
+    private final List<PendingUpdate> pendingUpdates;
     
-    public SlaveUpdatesImpl(Path backupDir, RemoteEntityUpdater slaveUpdater, Predicate<Throwable> commsLinkFailureTest) {
-        this.backupDir = Objects.requireNonNull(backupDir);
-        this.slaveUpdater = Objects.requireNonNull(slaveUpdater);
-        this.commsLinkFailureTest = commsLinkFailureTest;
-        final Object [] loaded = this.loadOrCreate();
-        
-        this.updateTypes = (Queue<Integer>)loaded[0];
-        logger.log(Level.INFO, "Pending updates count: {0}", this.updateTypes.size());
-        
-        this.entities = (Queue)loaded[1];
-        logger.log(Level.FINE, "Pending entities: {0}", this.entities);
+    private int mark = -1;
+    
+    public PendingUpdatesManagerImpl(File file, Updater updater, Predicate<Throwable> retryOnExceptionTest) {
+        this.file = Objects.requireNonNull(file);
+        this.updater = Objects.requireNonNull(updater);
+        this.retryOnExceptionTest = retryOnExceptionTest;
+        this.pendingUpdates = (List<PendingUpdate>)this.readSilently(file, new LinkedList<>());
+        logger.log(Level.INFO, "Pending updates count: {0}", this.pendingUpdates.size());
         
         this.init();
     }
@@ -92,19 +86,20 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
                     if(paused) {
                         continue;
                     }
+                    if(pendingUpdates.isEmpty()) {
+                        continue;
+                    }
                     
                     try{
-                        final Integer updateType;
-                        final Object entity;
+                        final PendingUpdate pendingUpdate;
                         try{
                             lock.readLock().lock();
-                            updateType = updateTypes.peek();
-                            entity = entities.peek();
+                            pendingUpdate = pendingUpdates.get(0);
                         }finally{
                             lock.readLock().unlock();
                         }
 
-                        if(updateType == null) {
+                        if(pendingUpdate == null) {
                             continue;
                         }
 
@@ -112,32 +107,31 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
 
                             lock.writeLock().lock();
                             
+                            final UpdateType updateType = pendingUpdate.getUpdateType();
                             switch(updateType) {
-                                case persist: 
-                                    slaveUpdater.persist(entity); break;
-                                case merge:
-                                    slaveUpdater.merge(entity); break;
-                                case remove:
-                                    slaveUpdater.remove(entity); break;
+                                case PERSIST: 
+                                    updater.persist(pendingUpdate.getEntity()); break;
+                                case MERGE:
+                                    updater.merge(pendingUpdate.getEntity()); break;
+                                case REMOVE:
+                                    updater.remove(pendingUpdate.getEntity()); break;
                                 default:
                                     throw new UnsupportedOperationException();
                             }
 
-                            updateTypes.poll();
-                            entities.poll();
+                            pendingUpdates.remove(0);
 
                         }catch(Exception e) {
                             
-                            if(commsLinkFailureTest != null && commsLinkFailureTest.test(e)) {
+                            if(retryOnExceptionTest != null && retryOnExceptionTest.test(e)) {
                                 
 //                                logger.log(Level.INFO, "Communications exception updating remote entity: " + entity, e);
                                 
                             }else{
                                 
-                                logger.log(Level.WARNING, "Failed to update remote entity: "+entity, e);
+                                logger.log(Level.WARNING, "Failed to update remote entity: " + pendingUpdate.getEntity(), e);
                                 
-                                updateTypes.poll();
-                                entities.poll();
+                                pendingUpdates.remove(0);
                             }
                         }finally{
                             lock.writeLock().unlock();
@@ -151,6 +145,39 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
         };
         thread.setDaemon(true);
         thread.start();
+    }
+    
+    @Override
+    public int getMark() {
+        return this.mark;
+    }
+    
+    @Override
+    public int mark(int n) {
+        this.mark = n;
+        return this.mark;
+    }
+    
+    @Override
+    public synchronized void rollbackToMarkedPosition() {
+        if(this.isMarked()) {
+            final int size;
+            try{
+                lock.readLock().lock();
+                size = this.pendingUpdates.size();
+            }finally{
+                lock.readLock().unlock();
+            }
+            if(this.mark < size) {
+                try{
+                    lock.writeLock().lock();
+                    this.pendingUpdates.subList(this.mark, size).clear();
+                }finally{
+                    lock.writeLock().unlock();
+                }
+            }
+            this.unmark();
+        }
     }
     
     @Override
@@ -192,69 +219,40 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
         return !this.isPaused() ? false : (paused = false);
     }
     
-    private Object [] loadOrCreate() {
-        final Object a = this.readNamedObject("updateTypes.pending", new LinkedList<>());
-        final Object b = this.readNamedObject("entities.pending", new LinkedList());
-        return new Object[]{a, b};
-    }
-    
     private void save() {
-        
         logger.log(Level.FINE, "Saving {0} slave updates", this.getPendingUpdatesSize());
-        
-        new Thread() {
-            @Override
-            public void run() {
-                try{
-                    writeNamedObject("updateTypes.pending", updateTypes);
-                }catch(RuntimeException e) { 
-                    logger.log(Level.WARNING, "Error saving updateTypes.pending", e);
-                }
-            }
-        }.start();
-        new Thread() {
-            @Override
-            public void run() {
-                try{
-                    writeNamedObject("entities.pending", entities);
-                }catch(RuntimeException e) { 
-                    logger.log(Level.WARNING, "Error saving entities.pending", e);
-                }
-            }
-        }.start();
+        try{
+            writeSilently(pendingUpdates, file);
+        }catch(RuntimeException e) { 
+            logger.log(Level.WARNING, "Error saving to: " + file, e);
+        }
     }
     
     @Override
     public boolean addPersist(Object entity) {
-        return this.add(persist, entity);
+        return this.add(UpdateType.PERSIST, entity);
     }
 
     @Override
     public boolean addMerge(Object entity) {
-        return this.add(merge, entity);
+        return this.add(UpdateType.MERGE, entity);
     }
 
     @Override
     public boolean addRemove(Object entity) {
-        return this.add(remove, entity);
+        return this.add(UpdateType.REMOVE, entity);
     }
 
-    public boolean add(int updateType, Object entity) {
+    public boolean add(UpdateType updateType, Object entity) {
         
         if(stopRequested) { throw new IllegalStateException(); }
         
         try{
             
-            lock.writeLock().lock();
+            lock.writeLock().lock(); 
             
-            updateTypes.add(updateType);
-            return entities.add(entity);
+            return this.pendingUpdates.add(new PendingUpdateImpl(updateType, entity));
             
-        }catch(RuntimeException e) {
-            while(updateTypes.size() > entities.size()) {
-                updateTypes.remove(updateTypes.size()-1);
-            }
-            throw e;
         }finally{
             
             lock.writeLock().unlock();
@@ -265,23 +263,22 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
 
     @Override
     public int getPendingUpdatesSize() {
-        return Math.min(this.updateTypes.size(), this.entities.size());
+        return this.pendingUpdates.size();
     }
-
-    public Object readNamedObject(String name, Object outputIfNone) {
-        final String path = Paths.get(backupDir.toString(), name).toString();
+    
+    public Object readSilently(File f, Object outputIfNone) {
         try{
-            return this.readObject(path);
+            return this.readObject(f);
         }catch(FileNotFoundException e) {
             logger.warning(e.toString());
             return outputIfNone;
         }catch(ClassNotFoundException | IOException e) {
-            logger.log(Level.WARNING, "Error reading: "+name+" from: "+path, e);
+            logger.log(Level.WARNING, "Error from: " + f, e);
             return outputIfNone;
         }
     }
 
-    public Object readObject(String source) throws ClassNotFoundException, IOException {
+    public Object readObject(File f) throws ClassNotFoundException, IOException {
         
         Object result = null;
         
@@ -291,7 +288,7 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
         
         try {
 
-            fis = new FileInputStream(source);
+            fis = new FileInputStream(f);
             bis = new BufferedInputStream(fis);
             ois = new ObjectInputStream(bis);
 
@@ -311,16 +308,15 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
         return result;
     }
 
-    public void writeNamedObject(String name, Object obj) {
-        final String path = Paths.get(backupDir.toString(), name).toString();
+    public void writeSilently(Object obj, File f) {
         try{
-            this.writeObject(path, obj);
+            this.writeObject(obj, f);
         }catch(Exception e) {
-            logger.log(Level.WARNING, "Error writing: "+name+" to: "+path, e);
+            logger.log(Level.WARNING, "Error writing to: " + f, e);
         }
     }
     
-    public void writeObject(String destination, Object obj) throws FileNotFoundException, IOException {
+    public void writeObject(Object obj, File f) throws FileNotFoundException, IOException {
         
         FileOutputStream     fos = null;
         BufferedOutputStream bos = null;
@@ -328,7 +324,7 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
         
         try{
             
-            fos = new FileOutputStream(destination);
+            fos = new FileOutputStream(f);
             bos = new BufferedOutputStream(fos);
             oos = new ObjectOutputStream(bos);
 
@@ -344,5 +340,22 @@ public class SlaveUpdatesImpl implements SlaveUpdates {
             if (bos != null) try { bos.close(); }catch(IOException e) { logger.log(Level.WARNING, "", e); }
             if (fos != null) try { fos.close(); }catch(IOException e) { logger.log(Level.WARNING, "", e); }
         }
+    }
+
+    public File getFile() {
+        return file;
+    }
+
+    public Updater getUpdater() {
+        return updater;
+    }
+
+    public Predicate<Throwable> getRetryOnExceptionTest() {
+        return retryOnExceptionTest;
+    }
+
+    @Override
+    public List<PendingUpdate> getPendingUpdates() {
+        return Collections.unmodifiableList(this.pendingUpdates);
     }
 }

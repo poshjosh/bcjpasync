@@ -18,66 +18,60 @@ package com.bc.jpa.sync.impl;
 
 import com.bc.jpa.EntityUpdater;
 import com.bc.jpa.JpaContext;
-import com.bc.jpa.JpaMetaData;
 import com.bc.jpa.JpaUtil;
+import com.bc.jpa.sync.MasterSlaveTypes;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.persistence.EntityManager;
-import com.bc.jpa.sync.RemoteEntityUpdater;
+import java.util.List;
+import com.bc.jpa.sync.Updater;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 9, 2017 10:53:46 PM
  */
-public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
+public class UpdaterImpl implements Updater {
     
-    private transient static final Logger logger = Logger.getLogger(RemoteEntityUpdaterImpl.class.getName());
+    private transient static final Logger logger = Logger.getLogger(UpdaterImpl.class.getName());
     
     private final int merge = 1;
     private final int persist = 2;
     private final int remove = 3;
     
-    private final JpaContext jpa;
+    private final JpaContext jpaContext;
 
-    private final List<Class> masterTypes;
-    private final List<Class> slaveTypes;
+    private final MasterSlaveTypes masterSlaveTypes;
+
+    public UpdaterImpl(JpaContext jpaContext) {
+        this(jpaContext, (persistencUnit) -> true);
+    }
     
-    public RemoteEntityUpdaterImpl(
-            JpaContext jpa, 
+    public UpdaterImpl(JpaContext jpaContext, Predicate<String> persistenceUnitTest) {
+        this(jpaContext, new MasterSlaveTypesImpl(jpaContext.getMetaData(), persistenceUnitTest));
+    }
+    
+    public UpdaterImpl(
+            JpaContext jpaContext, 
             Predicate<String> masterPersistenceUnitFilter,
             Predicate<String> slavePersistenceUnitFilter) {
-        this.jpa = Objects.requireNonNull(jpa);
-        this.slaveTypes = new ArrayList();
-        this.masterTypes = new ArrayList();
-        final JpaMetaData metaData = this.jpa.getMetaData();
-        final String [] puNames = metaData.getPersistenceUnitNames();
-        for(String puName : puNames) {
-            if(masterPersistenceUnitFilter.test(puName)) {
-                final Class [] puClasses = metaData.getEntityClasses(puName); 
-                this.masterTypes.addAll(Arrays.asList(puClasses));
-            }
-            if(slavePersistenceUnitFilter.test(puName)) {
-                final Class [] puClasses = metaData.getEntityClasses(puName); 
-                this.slaveTypes.addAll(Arrays.asList(puClasses));
-            }
-        }
-        logger.log(Level.FINE, "Master types: {0}", masterTypes);
-        logger.log(Level.FINE, "Slave types: {0}", slaveTypes);
+        this(jpaContext, new MasterSlaveTypesImpl(jpaContext.getMetaData(), masterPersistenceUnitFilter, slavePersistenceUnitFilter));
+    }
+
+    public UpdaterImpl(JpaContext jpaContext, MasterSlaveTypes masterSlaveTypes) {
+        this.jpaContext = Objects.requireNonNull(jpaContext);
+        this.masterSlaveTypes = Objects.requireNonNull(masterSlaveTypes);
     }
     
     @Override
     public Object update(Object entity, Object entityId) {
         
-        entity = this.getRemoteEntity(entity);
+        entity = this.getSlave(entity);
         
-        final EntityManager em = jpa.getEntityManager(entity.getClass());
+        final EntityManager em = jpaContext.getEntityManager(entity.getClass());
         
         try{
             
@@ -113,9 +107,9 @@ public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
 
     private Object update(Object entity, int type) {
 
-        entity = this.getRemoteEntity(entity);
+        entity = this.getSlave(entity);
 
-        final EntityManager em = jpa.getEntityManager(entity.getClass());
+        final EntityManager em = jpaContext.getEntityManager(entity.getClass());
         
         try{
         
@@ -128,7 +122,7 @@ public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
         }
     }    
 
-    private Object beginUpdateCommitAndClose(EntityManager em, Object remote, int type) {
+    private Object beginUpdateCommitAndClose(EntityManager em, Object entity, int type) {
         Object output;
         try{
 
@@ -136,14 +130,31 @@ public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
             
             switch(type) {
                 case merge: 
-                    logger.log(Level.FINE, "Merging: {0}", remote);
-                    output = this.merge(em, remote); break;
+                    logger.log(Level.FINE, "Merging: {0}", entity);
+                    try{
+                        output = em.merge(entity);
+                    }catch(Exception e) {
+System.err.println("---------------- CAUGHT EXCEPTION WHILE MERGING ---------------\n" + e);                        
+                        final Class entityType = entity.getClass();
+                        final EntityUpdater updater = jpaContext.getEntityUpdater(entityType);
+                        final Object found = em.find(entityType, updater.getId(entity));
+                        updater.update(entity, found, false);
+                        output = em.merge(found);
+System.out.println("----------------   SUCCESSFULLY MERGED ENTITY ---------------");                                                
+//                        em.persist(remote);
+//                        output = em.find(remote.getClass(), this.getId(remote));
+                    }
+                    break;
                 case persist: 
-                    logger.log(Level.FINE, "Persisting: {0}", remote);
-                    this.persist(em, remote); output = remote; break;
+                    logger.log(Level.FINE, "Persisting: {0}", entity);
+                    em.persist(entity); 
+                    output = entity; 
+                    break;
                 case remove: 
-                    logger.log(Level.FINE, "Removing: {0}", remote);
-                    this.remove(em, remote); output = remote; break;
+                    logger.log(Level.FINE, "Removing: {0}", entity);
+                    em.remove(entity); 
+                    output = entity; 
+                    break;
                 default: 
                     throw new UnsupportedOperationException();
             }
@@ -157,97 +168,85 @@ public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
         return output;
     }
     
-    public Object merge(EntityManager em, Object remote) {
-        try{
-            return em.merge(remote);
-        }catch(Exception e) {
-            this.persist(em, remote);
-            final EntityUpdater remoteUpdater = jpa.getEntityUpdater(remote.getClass());
-            return em.find(remote.getClass(), remoteUpdater.getId(remote));
-        }
+    private Object getId(Object entity) {
+        final EntityUpdater remoteUpdater = jpaContext.getEntityUpdater(entity.getClass());
+        return remoteUpdater.getId(entity);
     }
     
-    public void persist(EntityManager em, Object remote) {
-        em.persist(remote);
-    }
-
-    public void remove(EntityManager em, Object remote) {
-        em.remove(remote);
-    }
-    
-    public Object getRemoteEntity(Object local) {
+    public Object getSlave(Object master) {
         
-        if(!this.masterTypes.contains(local.getClass())) {
-            throw new UnsupportedOperationException("Not a master type: "+local.getClass()+", instance: "+local);
+        if(!this.masterSlaveTypes.getMasterTypes().contains(master.getClass())) {
+            throw new UnsupportedOperationException("Not a master type: "+master.getClass()+", instance: "+master);
         }
         
-        final Object remote = this.getRemote(local, null);
+        final Object slave = this.toSlave(master, null);
         
         if(logger.isLoggable(Level.FINE)) {
-            logger.log(Level.FINE, "#getRemote(..) Local: {0}, remote: {1}", 
-                    new Object[]{local, remote});
+            logger.log(Level.FINE, "#getSlave(..) Master: {0}, slave: {1}", 
+                    new Object[]{master, slave});
         }
         
-        Objects.requireNonNull(remote);
+        Objects.requireNonNull(slave);
         
-        return remote;
+        return slave;
     }
     
-    public Object getRemote(Object local, Object outputIfNone) {
-        
+    public Object toSlave(Object master, Object outputIfNone) {
+        final List<Class> slaveTypes = masterSlaveTypes.getSlaveTypes();
         Object output = outputIfNone;
-        final Class localType = local.getClass();
-        if(slaveTypes.contains(localType)) {
-            output = local;
+        final Class masterType = master.getClass();
+        if(slaveTypes.contains(masterType)) {
+            output = master;
         }else{
-            for(Class remoteType : slaveTypes) {
-                if(remoteType.getSimpleName().equals(localType.getSimpleName())) {
-                    final Object remoteEntity = this.newInstance(remoteType);
-                    this.updateRemote(local, localType, remoteEntity, remoteType);
-                    output = remoteEntity;
-                    break;
-                }
+            final Class slaveType = masterSlaveTypes.getSlaveType(masterType, null);
+            if(slaveType != null) {
+                output = this.createSlave(master, masterType, slaveType);
             }
         }
         return output;
     }
     
-    public void updateRemote(Object local, Class localType, Object remote, Class remoteType) {
+    public Object createSlave(Object master, Class masterType, Class slaveType) {
         
-//System.out.println("#updateRemote( " + local + ", " + remote + " )");        
-        final EntityUpdater masterUpdater = jpa.getEntityUpdater(localType);
-        final EntityUpdater slaveUpdater = jpa.getEntityUpdater(remoteType);
-        final String [] columnNames = jpa.getMetaData().getColumnNames(remoteType);
+        final Object slave = this.newInstance(slaveType);
         
-        this.removeManyToOnes(local);
+        logger.finer(() -> "Source: " + master + ", target: " + slave);
+
+        final EntityUpdater masterUpdater = jpaContext.getEntityUpdater(masterType);
+        final EntityUpdater slaveUpdater = jpaContext.getEntityUpdater(slaveType);
+        final String [] columnNames = jpaContext.getMetaData().getColumnNames(slaveType);
+        
+        this.removeManyToOnes(master);
         
         for(String columnName : columnNames) {
-            final Object localValue = masterUpdater.getValue(local, columnName);
-            final boolean selfReference = local.equals(localValue);
-            final Object remoteValue;
-            if(localValue == null) {
-                remoteValue = localValue;
+            final Object masterValue = masterUpdater.getValue(master, columnName);
+            final boolean selfReference = master.equals(masterValue);
+            final Object slaveValue;
+            if(masterValue == null) {
+                slaveValue = masterValue;
             }else if(selfReference) {
-                remoteValue = remote;
-            }else if(localValue instanceof Collection) {
-                final Collection localCollection = (Collection)localValue;
-                final Collection remoteCollection = (Collection)this.newInstance(localCollection.getClass());
-                for(Object e : localCollection) {
-                    final Object remoteE = this.getRemote(e, e);
-                    remoteCollection.add(remoteE);
+                slaveValue = slave;
+            }else if(masterValue instanceof Collection) {
+                final Collection masterCollection = (Collection)masterValue;
+                final Collection slaveCollection = (Collection)this.newInstance(masterCollection.getClass());
+                for(Object e : masterCollection) {
+                    final Object slaveE = this.toSlave(e, e);
+                    slaveCollection.add(slaveE);
                 }
-                remoteValue = remoteCollection;
+                slaveValue = slaveCollection;
             }else{
-                remoteValue = this.getRemote(localValue, localValue);
+                slaveValue = this.toSlave(masterValue, masterValue);
             }
 //System.out.println("#setRemoteValue( " + remote + ", " + columnName + " ): "+remoteValue);                    
-            slaveUpdater.setValue(remote, columnName, remoteValue);
+            slaveUpdater.setValue(slave, columnName, slaveValue);
         }
+        
+        return slave;
     }
     
-    private void removeManyToOnes(Object local) {
-        final Class refClass = local.getClass();
-        final Class [] refingClasses = jpa.getMetaData().getReferencingClasses(refClass);
+    private void removeManyToOnes(Object entity) {
+        final Class refClass = entity.getClass();
+        final Class [] refingClasses = jpaContext.getMetaData().getReferencingClasses(refClass);
         if(refingClasses != null && refingClasses.length != 0) {
             for(Class refingClass : refingClasses) {
                 final Method setter = JpaUtil.getMethod(true, refClass, refingClass);
@@ -255,7 +254,7 @@ public class RemoteEntityUpdaterImpl implements RemoteEntityUpdater {
                     continue;
                 }
                 try{
-                    setter.invoke(local, new Object[]{null});
+                    setter.invoke(entity, new Object[]{null});
                 }catch(IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
                     logger.log(Level.WARNING, "Error invoking "+setter.getName()+" with argument: null", e);
                 }
