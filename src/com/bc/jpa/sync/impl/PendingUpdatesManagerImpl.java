@@ -16,6 +16,7 @@
 
 package com.bc.jpa.sync.impl;
 
+import com.bc.jpa.sync.Updater;
 import com.bc.jpa.sync.PendingUpdate;
 import com.bc.jpa.sync.PendingUpdate.UpdateType;
 import java.io.BufferedInputStream;
@@ -33,7 +34,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import com.bc.jpa.sync.Updater;
 import com.bc.jpa.sync.PendingUpdatesManager;
 import java.io.File;
 import java.util.Collections;

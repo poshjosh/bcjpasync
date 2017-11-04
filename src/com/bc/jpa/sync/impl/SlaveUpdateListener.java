@@ -16,12 +16,6 @@
 
 package com.bc.jpa.sync.impl;
 
-import com.bc.jpa.JpaMetaData;
-import com.bc.jpa.sync.predicates.GetEntityTypes;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
-import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.persistence.PostLoad;
@@ -32,6 +26,7 @@ import javax.persistence.PrePersist;
 import javax.persistence.PreRemove;
 import javax.persistence.PreUpdate;
 import com.bc.jpa.sync.PendingUpdatesManager;
+import java.util.function.Predicate;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Jul 29, 2017 8:59:07 AM
@@ -41,19 +36,13 @@ public class SlaveUpdateListener {
     private static final Logger logger = Logger.getLogger(SlaveUpdateListener.class.getName());
     
     private final PendingUpdatesManager pendingUpdatesManager;
+    
+    private final Predicate entityFilter;
 
-    private final List<Class> masterTypes;
-    
-    public SlaveUpdateListener(PendingUpdatesManager updateManager, 
-            JpaMetaData metaData, Predicate<String> masterPersistenceUnitTest) {
-        this(updateManager, 
-                metaData == null ? Collections.EMPTY_LIST : 
-                Collections.unmodifiableList(new GetEntityTypes(masterPersistenceUnitTest).apply(metaData)));
-    }
-    
-    public SlaveUpdateListener(PendingUpdatesManager slaveUpdates, List<Class> masterTypes) {
-        this.pendingUpdatesManager = Objects.requireNonNull(slaveUpdates);
-        this.masterTypes = Objects.requireNonNull(masterTypes);
+    public SlaveUpdateListener(
+            PendingUpdatesManager pendingUpdatesManager, Predicate entityFilter) {
+        this.pendingUpdatesManager = pendingUpdatesManager;
+        this.entityFilter = entityFilter;
     }
     
     @PrePersist public void onPrePersist(Object o) {}
@@ -80,15 +69,11 @@ public class SlaveUpdateListener {
     }
     
     public boolean mayUpdateSlave(Object entity) {
-        return pendingUpdatesManager != null && this.isMasterType(entity);
+        final boolean output = pendingUpdatesManager != null && this.accept(entity);
+        return output;
     }
     
-    public boolean isMasterType(Object entity) {
-        for(Class cls : masterTypes) {
-            if(cls.isAssignableFrom(entity.getClass())) {
-                return true;
-            }
-        }
-        return false;
+    public boolean accept(Object entity) {
+        return this.entityFilter != null && this.entityFilter.test(entity);
     }
 }

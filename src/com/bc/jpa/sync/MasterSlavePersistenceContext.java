@@ -16,29 +16,18 @@
 
 package com.bc.jpa.sync;
 
-import java.util.List;
-import java.util.function.Predicate;
+import com.bc.jpa.context.PersistenceUnitContext;
+import java.util.function.Function;
 
 /**
- * @author Chinomso Bassey Ikwuagwu on Aug 7, 2017 8:43:23 PM
+ * @author Chinomso Bassey Ikwuagwu on Oct 30, 2017 10:27:18 PM
  */
-public interface MasterSlaveTypes {
-    
-    Class getAlternateType(Class type, Class outputIfNone);
-    
-    Predicate<String> getMasterPersistenceUnitTest();
+public interface MasterSlavePersistenceContext extends Function {
 
-    Class getMasterType(Class type, Class outputIfNone);
+    PersistenceUnitContext getMaster();
 
-    List<Class> getMasterTypes();
-    
-    Predicate<String> getSlavePersistenceUnitTest();
+    PersistenceUnitContext getSlave();
 
-    Class getSlaveType(Class type, Class outputIfNone);
+    Object toSlave(Object master, Object outputIfNone);
 
-    List<Class> getSlaveTypes();
-    
-    boolean isMasterType(Class type);
-    
-    boolean isSlaveType(Class type);
 }

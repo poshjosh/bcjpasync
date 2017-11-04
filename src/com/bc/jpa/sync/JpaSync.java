@@ -18,6 +18,7 @@ package com.bc.jpa.sync;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 8, 2017 10:12:08 PM
@@ -28,18 +29,14 @@ public interface JpaSync {
         @Override
         public synchronized boolean isRunning() { return false; }
         @Override
-        public Map<Class, Integer> sync(String puName) { return Collections.EMPTY_MAP; }
-        @Override
-        public Map<Class, Integer> sync(Class[] entityTypes) { return Collections.EMPTY_MAP; }
+        public Map<Class, Integer> sync(Set<Class> entityTypes) { return Collections.EMPTY_MAP; }
         @Override
         public Integer sync(Class entityType) { return 0; }
     };
     
     boolean isRunning();
 
-    Map<Class, Integer> sync(String puName);
-
-    Map<Class, Integer> sync(Class[] entityTypes);
+    Map<Class, Integer> sync(Set<Class> entityTypes);
 
     Integer sync(Class entityType);
 

@@ -16,18 +16,18 @@
 
 package com.bc.jpa.sync.predicates;
 
-import com.bc.jpa.JpaMetaData;
+import com.bc.jpa.metadata.PersistenceMetaData;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Jul 29, 2017 11:12:12 AM
  */
-public class GetEntityTypes implements Function<JpaMetaData, List<Class>> {
+public class GetEntityTypes implements Function<PersistenceMetaData, List<Class>> {
 
     private final Predicate<String> persistenceUnitNameTest;
 
@@ -36,13 +36,13 @@ public class GetEntityTypes implements Function<JpaMetaData, List<Class>> {
     }
     
     @Override
-    public List<Class> apply(JpaMetaData metaData) {
+    public List<Class> apply(PersistenceMetaData metaData) {
         final List<Class> output = new ArrayList();
-        final String [] puNames = metaData.getPersistenceUnitNames();
+        final Set<String> puNames = metaData.getPersistenceUnitNames();
         for(String puName : puNames) {
             if(persistenceUnitNameTest.test(puName)) {
-                final Class [] puClasses = metaData.getEntityClasses(puName); 
-                output.addAll(Arrays.asList(puClasses));
+                final Set<Class> puClasses = metaData.getEntityClasses(puName); 
+                output.addAll(puClasses);
             }
         }
 //        logger.log(Level.FINE, "Master types: {0}", masterTypes);

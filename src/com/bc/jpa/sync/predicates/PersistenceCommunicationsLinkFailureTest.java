@@ -16,6 +16,9 @@
 
 package com.bc.jpa.sync.predicates;
 
+import com.bc.functions.FindExceptionInChain;
+import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import org.eclipse.persistence.exceptions.DatabaseException;
 
@@ -24,19 +27,20 @@ import org.eclipse.persistence.exceptions.DatabaseException;
  */
 public class PersistenceCommunicationsLinkFailureTest implements Predicate<Throwable> {
 
+    private final BiFunction<Throwable, Predicate<Throwable>, Optional<Throwable>> findExceptionInHeirarchy;
+
+    public PersistenceCommunicationsLinkFailureTest() {
+        
+        this.findExceptionInHeirarchy = new FindExceptionInChain();
+    }
+    
     @Override
-    public boolean test(Throwable t) {
-        boolean success = false;
-        do{
-            success = (t instanceof DatabaseException && ((DatabaseException)t).isCommunicationFailure());
-            if(success) {
-                break;
-            }
-            t = t.getCause();
-            if(t == null) {
-                break;
-            }
-        }while(true);
-        return success;
+    public boolean test(Throwable exception) {
+        
+        final Predicate<Throwable> exceptionTest = (t) -> 
+                t instanceof DatabaseException && ((DatabaseException)t)
+                        .isCommunicationFailure();
+        
+        return findExceptionInHeirarchy.apply(exception, exceptionTest).isPresent();
     }
 }

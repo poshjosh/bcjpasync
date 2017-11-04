@@ -16,9 +16,9 @@
 
 package com.bc.jpa.sync.impl;
 
+import com.bc.jpa.sync.Updater;
 import com.bc.jpa.EntityUpdater;
-import com.bc.jpa.JpaContext;
-import com.bc.jpa.JpaMetaData;
+import com.bc.jpa.context.PersistenceUnitContext;
 import com.bc.jpa.search.QuerySearchResults;
 import com.bc.jpa.search.SearchResults;
 import com.bc.jpa.sync.JpaSync;
@@ -34,7 +34,7 @@ import javax.persistence.EntityManager;
 import javax.persistence.TypedQuery;
 import javax.persistence.criteria.CriteriaBuilder;
 import javax.persistence.criteria.CriteriaQuery;
-import com.bc.jpa.sync.Updater;
+import java.util.Set;
 
 /**
  * @author Chinomso Bassey Ikwuagwu on Mar 8, 2017 9:57:01 PM
@@ -45,7 +45,9 @@ public class JpaSyncImpl implements JpaSync {
     
     private volatile boolean running;
     
-    private final JpaContext master;
+    private final PersistenceUnitContext master;
+    
+    private final PersistenceUnitContext slave;
     
     private final int pageSize;
     
@@ -59,10 +61,13 @@ public class JpaSyncImpl implements JpaSync {
     
     private final Updater remoteUpdater;
 
-    public JpaSyncImpl(JpaContext master, Updater remoteUpdater, 
+    public JpaSyncImpl(
+            PersistenceUnitContext master, 
+            PersistenceUnitContext slave, 
             int pageSize, Predicate<Throwable> commsLinkFailureTest) {
         this.master = Objects.requireNonNull(master);
-        this.remoteUpdater = Objects.requireNonNull(remoteUpdater);
+        this.slave = Objects.requireNonNull(slave);
+        this.remoteUpdater = Objects.requireNonNull(new SlaveUpdater(master, slave));
         this.pageSize = pageSize;
         this.commsLinkFailureTest = commsLinkFailureTest;
     }
@@ -71,31 +76,13 @@ public class JpaSyncImpl implements JpaSync {
     public boolean isRunning() {
         return running;
     }
-
-    @Override
-    public synchronized Map<Class, Integer> sync(String puName) {
-        
-        try{
-            running = true;
-        
-            final JpaMetaData metaData = master.getMetaData();
-
-            final Class [] entityTypes = metaData.getEntityClasses(puName);
-
-            return this.sync(entityTypes, true);
-            
-        }finally{
-            
-            running = false;
-        }
-    }
     
     @Override
-    public synchronized Map<Class, Integer> sync(Class [] entityTypes) {
+    public synchronized Map<Class, Integer> sync(Set<Class> entityTypes) {
         return this.sync(entityTypes, true);
     }
         
-    public synchronized Map<Class, Integer> sync(Class [] entityTypes, boolean setStoppedOnComplete) {    
+    public synchronized Map<Class, Integer> sync(Set<Class> entityTypes, boolean setStoppedOnComplete) {    
         try{
 
             running = true;
@@ -129,12 +116,14 @@ public class JpaSyncImpl implements JpaSync {
         
         int entityUpdateCount = 0;
 
-        final EntityManager masterEm = master.getEntityManager(entityType);
-      
+        EntityManager masterEm = null;
+        
         try{
             
             running = true;
             
+            masterEm = master.getEntityManager();
+      
             final CriteriaBuilder cb = masterEm.getCriteriaBuilder();
             
             final CriteriaQuery cq = cb.createQuery(entityType);
@@ -213,11 +202,13 @@ public class JpaSyncImpl implements JpaSync {
             if(setStoppedOnComplete) {
                 running = false;
             }
-            
-            masterEm.close();
+            if(masterEm != null && masterEm.isOpen()) {
+                masterEm.close();
+            }
         }
         
-        logger.log(Level.FINE, "Number of records synced: {0}", entityUpdateCount);
+        final int count = entityUpdateCount;
+        logger.fine(() -> "Entity type: "+entityType.getName()+", number of records synced: {0}"+count);
 
         return entityUpdateCount;
     }
